@@ -10,6 +10,7 @@ import RepoModal from '@/components/RepoModal';
 import BranchSelector from '@/components/BranchSelector';
 import GitPanel from '@/components/GitPanel';
 import EnvVariablesPanel from '@/components/EnvVariablesPanel';
+import * as git from '@/lib/git';
 
 interface FileNode {
   name: string;
@@ -17,6 +18,92 @@ interface FileNode {
   type: 'file' | 'folder';
   children?: FileNode[];
 }
+
+const buildFileTree = (items: any[]): FileNode[] => {
+  interface FolderMap {
+    [key: string]: FileNode;
+  }
+
+  const root: FolderMap = {};
+
+  // First pass: create all nodes
+  items.forEach((item) => {
+    const parts = item.path.split('/').filter((p: string) => p);
+    let currentPath = '';
+
+    parts.forEach((part: string, index: number) => {
+      if (index === 0) {
+        currentPath = part;
+      } else {
+        currentPath += '/' + part;
+      }
+
+      if (index === parts.length - 1) {
+        // File node
+        if (item.type === 'blob') {
+          if (!root[currentPath]) {
+            root[currentPath] = {
+              name: part,
+              path: item.path,
+              type: 'file',
+            };
+          }
+        }
+      } else {
+        // Folder node
+        if (!root[currentPath]) {
+          root[currentPath] = {
+            name: part,
+            path: currentPath,
+            type: 'folder',
+            children: [],
+          };
+        }
+      }
+    });
+  });
+
+  // Second pass: build hierarchy
+  const topLevel: FileNode[] = [];
+  const processed = new Set<string>();
+
+  Object.entries(root).forEach(([path, node]) => {
+    if (processed.has(path)) return;
+    processed.add(path);
+
+    const parts = path.split('/');
+    if (parts.length === 1) {
+      topLevel.push(node);
+    } else {
+      const parentPath = parts.slice(0, -1).join('/');
+      const parent = root[parentPath];
+      if (parent && parent.children) {
+        parent.children.push(node);
+        processed.add(path);
+      }
+    }
+  });
+
+  // Sort each level
+  const sortNodes = (nodes: FileNode[]) => {
+    nodes.forEach((node) => {
+      if (node.children) {
+        node.children.sort((a, b) => {
+          if (a.type === b.type) return a.name.localeCompare(b.name);
+          return a.type === 'folder' ? -1 : 1;
+        });
+        sortNodes(node.children);
+      }
+    });
+    nodes.sort((a, b) => {
+      if (a.type === b.type) return a.name.localeCompare(b.name);
+      return a.type === 'folder' ? -1 : 1;
+    });
+  };
+
+  sortNodes(topLevel);
+  return topLevel;
+};
 
 export default function Home() {
   const { data: session, status } = useSession();
@@ -34,6 +121,7 @@ export default function Home() {
   const [changedFiles, setChangedFiles] = useState<Map<string, { content: string; originalContent: string }>>(new Map());
   const [sidebarWidth, setSidebarWidth] = useState(256); // Default 256px (w-64)
   const [isResizing, setIsResizing] = useState(false);
+  const hasLoadedStoredRepo = useRef(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
 
   // Handle sidebar resizing
@@ -74,6 +162,16 @@ export default function Home() {
     }
   }, [status, router]);
 
+  const refreshRepoCloned = useCallback(async () => {
+    try {
+      const cloned = await git.isRepoCloned();
+      return cloned;
+    } catch (error) {
+      console.error('Error checking repo status:', error);
+      return false;
+    }
+  }, []);
+
   useEffect(() => {
     if (isDarkTheme) {
       document.documentElement.classList.remove('light');
@@ -84,113 +182,28 @@ export default function Home() {
     }
   }, [isDarkTheme]);
 
-  if (status === 'loading') {
-    return (
-      <div className="h-screen bg-vscode-bg flex items-center justify-center">
-        <div className="text-vscode-text">Loading...</div>
-      </div>
-    );
-  }
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    refreshRepoCloned();
+  }, [refreshRepoCloned]);
 
-  if (!session) {
-    return null;
-  }
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!repoInfo) return;
+    const url = `https://github.com/${repoInfo.owner}/${repoInfo.repo}`;
+    localStorage.setItem('last-repo', JSON.stringify({ url, branch: currentBranch }));
+  }, [repoInfo, currentBranch]);
 
-  const buildFileTree = (items: any[]): FileNode[] => {
-    interface FolderMap {
-      [key: string]: FileNode;
-    }
-
-    const root: FolderMap = {};
-
-    // First pass: create all nodes
-    items.forEach((item) => {
-      const parts = item.path.split('/').filter((p: string) => p);
-      let currentPath = '';
-
-      parts.forEach((part: string, index: number) => {
-        if (index === 0) {
-          currentPath = part;
-        } else {
-          currentPath += '/' + part;
-        }
-
-        if (index === parts.length - 1) {
-          // File node
-          if (item.type === 'blob') {
-            if (!root[currentPath]) {
-              root[currentPath] = {
-                name: part,
-                path: item.path,
-                type: 'file',
-              };
-            }
-          }
-        } else {
-          // Folder node
-          if (!root[currentPath]) {
-            root[currentPath] = {
-              name: part,
-              path: currentPath,
-              type: 'folder',
-              children: [],
-            };
-          }
-        }
-      });
-    });
-
-    // Second pass: build hierarchy
-    const topLevel: FileNode[] = [];
-    const processed = new Set<string>();
-
-    Object.entries(root).forEach(([path, node]) => {
-      if (processed.has(path)) return;
-      processed.add(path);
-
-      const parts = path.split('/');
-      if (parts.length === 1) {
-        topLevel.push(node);
-      } else {
-        const parentPath = parts.slice(0, -1).join('/');
-        const parent = root[parentPath];
-        if (parent && parent.children) {
-          parent.children.push(node);
-          processed.add(path);
-        }
-      }
-    });
-
-    // Sort each level
-    const sortNodes = (nodes: FileNode[]) => {
-      nodes.forEach((node) => {
-        if (node.children) {
-          node.children.sort((a, b) => {
-            if (a.type === b.type) return a.name.localeCompare(b.name);
-            return a.type === 'folder' ? -1 : 1;
-          });
-          sortNodes(node.children);
-        }
-      });
-      nodes.sort((a, b) => {
-        if (a.type === b.type) return a.name.localeCompare(b.name);
-        return a.type === 'folder' ? -1 : 1;
-      });
-    };
-
-    sortNodes(topLevel);
-    return topLevel;
-  };
-
-  const handleLoadRepo = async (url: string) => {
+  const handleLoadRepo = useCallback(async (url: string, branchOverride?: string) => {
     try {
+      const branchToLoad = branchOverride || currentBranch;
       const response = await fetch('/api/github', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url,
           token: (session as any).accessToken,
-          branch: currentBranch,
+          branch: branchToLoad,
         }),
       });
 
@@ -199,7 +212,7 @@ export default function Home() {
         const tree = buildFileTree(data.tree);
         setFiles(tree);
         setRepoInfo({ owner: data.owner, repo: data.repo });
-        setCurrentBranch(data.branch || 'main');
+        setCurrentBranch(data.branch || branchToLoad || 'main');
         setSelectedFile(null);
         setChangedFiles(new Map());
       } else {
@@ -209,7 +222,25 @@ export default function Home() {
       console.error('Error loading repository:', error);
       alert('Error loading repository');
     }
-  };
+  }, [currentBranch, session]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (status !== 'authenticated' || !session || repoInfo || hasLoadedStoredRepo.current) return;
+
+    const savedRepo = localStorage.getItem('last-repo');
+    if (!savedRepo) return;
+
+    try {
+      const parsed = JSON.parse(savedRepo);
+      if (parsed?.url) {
+        hasLoadedStoredRepo.current = true;
+        handleLoadRepo(parsed.url, parsed.branch);
+      }
+    } catch (error) {
+      console.error('Failed to restore last repo:', error);
+    }
+  }, [status, session, repoInfo, handleLoadRepo]);
 
   const handleBranchChange = async (newBranch: string) => {
     if (!repoInfo) return;
@@ -220,7 +251,7 @@ export default function Home() {
     
     // Reload repository with new branch
     const url = `https://github.com/${repoInfo.owner}/${repoInfo.repo}`;
-    await handleLoadRepo(url);
+    await handleLoadRepo(url, newBranch);
   };
 
   const getLanguageFromExtension = (filename: string): string => {
@@ -263,6 +294,21 @@ export default function Home() {
     if (!repoInfo) return;
 
     try {
+      const cloned = await refreshRepoCloned();
+      if (cloned) {
+        try {
+          const content = await git.readFile(path);
+          setSelectedFile({
+            content,
+            language: getLanguageFromExtension(path),
+            name: path,
+          });
+          return;
+        } catch (error) {
+          console.warn('Falling back to GitHub API for file content:', error);
+        }
+      }
+
       const response = await fetch('/api/github/file', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -313,7 +359,42 @@ export default function Home() {
     });
   };
 
+  const handleSaveFile = useCallback(async () => {
+    if (!selectedFile) return;
+    const cloned = await refreshRepoCloned();
+    if (!cloned) {
+      alert('Clone the repository to save changes.');
+      return;
+    }
+
+    const updatedContent = changedFiles.get(selectedFile.name)?.content ?? selectedFile.content;
+    try {
+      await git.writeFile(selectedFile.name, updatedContent);
+      setChangedFiles((prev) => {
+        const next = new Map(prev);
+        next.delete(selectedFile.name);
+        return next;
+      });
+      setSelectedFile((prev) => (prev ? { ...prev, content: updatedContent } : prev));
+    } catch (error) {
+      console.error('Error saving file:', error);
+      alert('Failed to save file');
+    }
+  }, [selectedFile, changedFiles, refreshRepoCloned]);
+
   const hasUnsavedChanges = selectedFile ? changedFiles.has(selectedFile.name) : false;
+
+  if (status === 'loading') {
+    return (
+      <div className="h-screen bg-vscode-bg flex items-center justify-center">
+        <div className="text-vscode-text">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return null;
+  }
 
   return (
     <div className="h-screen flex flex-col bg-vscode-bg">
@@ -356,6 +437,9 @@ export default function Home() {
                 setFiles([]);
                 setSelectedFile(null);
                 setChangedFiles(new Map());
+                if (typeof window !== 'undefined') {
+                  localStorage.removeItem('last-repo');
+                }
               }}
               className="flex items-center gap-2 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-vscode-text rounded text-sm transition-colors"
             >
@@ -422,6 +506,7 @@ export default function Home() {
               fileName={selectedFile.name}
               isDarkTheme={isDarkTheme}
               onContentChange={handleContentChange}
+              onSave={handleSaveFile}
               hasUnsavedChanges={hasUnsavedChanges}
             />
           ) : (
@@ -464,11 +549,11 @@ export default function Home() {
       {/* Git Panel */}
       {repoInfo && (
         <GitPanel
-          repoInfo={repoInfo}
-          branch={currentBranch}
+          repoUrl={`https://github.com/${repoInfo.owner}/${repoInfo.repo}`}
           token={(session as any).accessToken}
+          userName={(session as any).user?.name}
+          userEmail={(session as any).user?.email}
           isDarkTheme={isDarkTheme}
-          changedFiles={changedFiles}
         />
       )}
     </div>

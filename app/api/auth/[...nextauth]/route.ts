@@ -18,10 +18,11 @@ const handler = NextAuth({
       if (account) {
         token.accessToken = account.access_token;
       }
+      // Always return token with accessToken preserved
       return token;
     },
     async session({ session, token }) {
-      (session as any).accessToken = token.accessToken;
+      (session as any).accessToken = (token as any).accessToken;
       return session;
     },
   },
