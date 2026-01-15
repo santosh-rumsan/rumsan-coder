@@ -389,4 +389,36 @@ export async function isRepoCloned(): Promise<boolean> {
   }
 }
 
+async function removePath(path: string): Promise<void> {
+  const fs = getFS();
+  try {
+    const stat = await fs.promises.lstat(path);
+    if (stat.isDirectory()) {
+      const entries = await fs.promises.readdir(path);
+      for (const entry of entries) {
+        await removePath(`${path}/${entry}`);
+      }
+      await fs.promises.rmdir(path);
+    } else {
+      await fs.promises.unlink(path);
+    }
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') return;
+    throw error;
+  }
+}
+
+/**
+ * Clear the workspace directory and all git data from LightningFS.
+ */
+export async function clearWorkspace(): Promise<void> {
+  await removePath(WORK_DIR);
+  const fs = getFS();
+  try {
+    await fs.promises.mkdir(WORK_DIR);
+  } catch {
+    // Directory might already exist
+  }
+}
+
 export { WORK_DIR };

@@ -382,6 +382,47 @@ export default function Home() {
     }
   }, [selectedFile, changedFiles, refreshRepoCloned]);
 
+  const handleCloseRepo = useCallback(async () => {
+    if (!repoInfo) return;
+
+    let hasDirtyChanges = changedFiles.size > 0;
+    const cloned = await refreshRepoCloned();
+
+    if (cloned) {
+      try {
+        const statusMatrix = await git.getStatusMatrix();
+        if (statusMatrix.length > 0) {
+          hasDirtyChanges = true;
+        }
+      } catch (error) {
+        console.error('Failed to check git status before closing:', error);
+      }
+    }
+
+    if (hasDirtyChanges) {
+      const shouldDiscard = window.confirm(
+        'You have uncommitted changes. Do you want to discard them and close the repository?'
+      );
+      if (!shouldDiscard) return;
+    }
+
+    setRepoInfo(null);
+    setFiles([]);
+    setSelectedFile(null);
+    setChangedFiles(new Map());
+    setCurrentBranch('main');
+    hasLoadedStoredRepo.current = false;
+
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('last-repo');
+    }
+    try {
+      await git.clearWorkspace();
+    } catch (error) {
+      console.error('Failed to clear workspace:', error);
+    }
+  }, [repoInfo, changedFiles, refreshRepoCloned]);
+
   const hasUnsavedChanges = selectedFile ? changedFiles.has(selectedFile.name) : false;
 
   if (status === 'loading') {
@@ -432,15 +473,7 @@ export default function Home() {
           
           {repoInfo && (
             <button
-              onClick={() => {
-                setRepoInfo(null);
-                setFiles([]);
-                setSelectedFile(null);
-                setChangedFiles(new Map());
-                if (typeof window !== 'undefined') {
-                  localStorage.removeItem('last-repo');
-                }
-              }}
+              onClick={handleCloseRepo}
               className="flex items-center gap-2 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-vscode-text rounded text-sm transition-colors"
             >
               Close Repository

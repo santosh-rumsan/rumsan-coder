@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { GitCommit, FileText, GitBranch, Download, Upload, RefreshCw } from 'lucide-react';
 import * as git from '@/lib/git';
 
@@ -39,6 +39,7 @@ export default function GitPanel({
   const [isRepoCloned, setIsRepoCloned] = useState(false);
   const [newBranchName, setNewBranchName] = useState('');
   const [showBranchInput, setShowBranchInput] = useState(false);
+  const autoCloneTriggered = useRef(false);
 
   const gitConfig: git.GitConfig = {
     token,
@@ -48,13 +49,28 @@ export default function GitPanel({
 
   // Check if repo is cloned and load status
   useEffect(() => {
+    autoCloneTriggered.current = false;
+    setIsRepoCloned(false);
+    setChanges([]);
+    setBranches([]);
+    setCurrentBranch('main');
+  }, [repoUrl, token]);
+
+  useEffect(() => {
     const checkRepo = async () => {
+      if (!repoUrl) return;
       try {
         const cloned = await git.isRepoCloned();
         setIsRepoCloned(cloned);
         
         if (cloned) {
           await loadGitStatus();
+          return;
+        }
+
+        if (!autoCloneTriggered.current) {
+          autoCloneTriggered.current = true;
+          await handleClone();
         }
       } catch (error) {
         console.error('Error checking repo:', error);
@@ -64,7 +80,7 @@ export default function GitPanel({
     if (typeof window !== 'undefined') {
       checkRepo();
     }
-  }, []);
+  }, [repoUrl, token]);
 
   const loadGitStatus = async () => {
     try {
@@ -248,14 +264,10 @@ export default function GitPanel({
   if (!isRepoCloned) {
     return (
       <div className="fixed right-4 bottom-4 z-30">
-        <button
-          onClick={handleClone}
-          disabled={cloning}
-          className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 text-white rounded-lg shadow-lg transition-colors"
-        >
+        <div className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg shadow-lg">
           <Download className="w-5 h-5" />
-          {cloning ? 'Cloning...' : 'Clone Repository'}
-        </button>
+          <span>{cloning ? 'Cloning repository...' : 'Preparing repository...'}</span>
+        </div>
         {cloneProgress && (
           <div className="mt-2 text-sm text-white bg-black bg-opacity-70 px-3 py-2 rounded">
             {cloneProgress.phase}: {cloneProgress.loaded} / {cloneProgress.total}
