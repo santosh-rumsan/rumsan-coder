@@ -1,36 +1,79 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Rumsan Coder - VS Code Clone
 
-## Getting Started
+A VS Code-like application with GitHub authentication and repository browsing capabilities.
 
-First, run the development server:
+## Features
+
+- 🔐 **GitHub Authentication** - Secure login using GitHub OAuth
+- 📂 **Repository Browser** - Load any GitHub repository by URL
+- 🌲 **File Tree** - Collapsible tree structure displaying all repository files
+- 📝 **Code Editor** - Monaco Editor with syntax highlighting for 30+ languages
+- 🎨 **VS Code Theme** - Authentic VS Code dark theme
+
+## Setup Instructions
+
+### 1. Install Dependencies
+
+```bash
+npm install
+```
+
+### 2. Configure GitHub OAuth
+
+1. Go to https://github.com/settings/developers
+2. Click "New OAuth App"
+3. Fill in the application details:
+   - Application name: Rumsan Coder
+   - Homepage URL: http://localhost:3000
+   - Authorization callback URL: http://localhost:3000/api/auth/callback/github
+4. Click "Register application"
+5. Copy the Client ID and generate a new Client Secret
+
+### 3. Environment Variables
+
+Create a `.env.local` file in the root directory:
+
+```env
+GITHUB_ID=your_github_client_id
+GITHUB_SECRET=your_github_client_secret
+NEXTAUTH_SECRET=your_random_secret_key_here
+NEXTAUTH_URL=http://localhost:3000
+```
+
+Generate a random secret for `NEXTAUTH_SECRET`:
+```bash
+openssl rand -base64 32
+```
+
+### 4. Run the Application
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Usage
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. **Login** - Click "Sign in with GitHub" to authenticate
+2. **Open Repository** - Click the "Open Repository" button in the top bar
+3. **Enter URL** - Paste a GitHub repository URL (e.g., https://github.com/facebook/react)
+4. **Browse Files** - Click on files in the tree to view them in the editor
 
-## Learn More
+## Tech Stack
 
-To learn more about Next.js, take a look at the following resources:
+- **Next.js 14** - React framework with App Router
+- **TypeScript** - Type safety
+- **NextAuth.js** - Authentication
+- **Monaco Editor** - Code editor (same as VS Code)
+- **Tailwind CSS** - Styling
+- **Lucide React** - Icons
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Supported Languages
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+JavaScript, TypeScript, Python, Java, C, C++, C#, Go, Rust, PHP, Ruby, Swift, Kotlin, Scala, HTML, CSS, SCSS, Sass, JSON, XML, YAML, Markdown, SQL, Shell, and more.
 
-## Deploy on Vercel
+## License
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+MIT
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.

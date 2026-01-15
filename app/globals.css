@@ -1,26 +1,57 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --vscode-bg: #252526;
+  --vscode-sidebar: #1e1e1e;
+  --vscode-editor: #1e1e1e;
+  --vscode-border: #70707766;
+  --vscode-hover: #2a2d2e;
+  --vscode-text: #d4d4d4;
+  --background: #252526;
+  --foreground: #d4d4d4;
+}
+
+html.light {
+  --vscode-bg: #f5f5f5;
+  --vscode-sidebar: #ebebeb;
+  --vscode-editor: #ffffff;
+  --vscode-border: #908e8e66;
+  --vscode-hover: #f0f0f0;
+  --vscode-text: #333333;
+  --background: #f5f5f5;
+  --foreground: #333333;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  background: var(--background);
+}
+
+/* Thin border utilities */
+.border-thin-b {
+  border-bottom: 0.5px solid var(--vscode-border);
+}
+
+.border-thin-r {
+  border-right: 0.5px solid var(--vscode-border);
+}
+
+.border-thin {
+  border: 0.5px solid var(--vscode-border);
 }
