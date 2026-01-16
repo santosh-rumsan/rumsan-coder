@@ -3,20 +3,32 @@
 import { useSession, signOut } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { FolderGit2, LogOut, Github, File, Moon, Sun } from 'lucide-react';
+import { FolderGit2, LogOut, Github, File, Moon, Sun, X, ListTree, GitCommit, Settings } from 'lucide-react';
 import FileTree from '@/components/FileTree';
 import CodeEditor from '@/components/CodeEditor';
+import DiffViewer from '@/components/DiffViewer';
 import RepoModal from '@/components/RepoModal';
 import BranchSelector from '@/components/BranchSelector';
 import GitPanel from '@/components/GitPanel';
 import EnvVariablesPanel from '@/components/EnvVariablesPanel';
 import * as git from '@/lib/git';
+import { useAlert } from '@/components/AlertProvider';
 
 interface FileNode {
   name: string;
   path: string;
   type: 'file' | 'folder';
   children?: FileNode[];
+}
+
+interface OpenFile {
+  name: string;
+  content: string;
+  language: string;
+  kind?: 'file' | 'env' | 'diff';
+  originalContent?: string;
+  sourcePath?: string;
+  isDirty?: boolean;
 }
 
 const buildFileTree = (items: any[]): FileNode[] => {
@@ -106,6 +118,7 @@ const buildFileTree = (items: any[]): FileNode[] => {
 };
 
 export default function Home() {
+  const { notify } = useAlert();
   const { data: session, status } = useSession();
   const router = useRouter();
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -114,13 +127,24 @@ export default function Home() {
     content: string;
     language: string;
     name: string;
+    kind?: 'file' | 'env' | 'diff';
+    originalContent?: string;
+    sourcePath?: string;
+    isDirty?: boolean;
   } | null>(null);
+  const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
   const [repoInfo, setRepoInfo] = useState<{ owner: string; repo: string } | null>(null);
   const [isDarkTheme, setIsDarkTheme] = useState(true);
   const [currentBranch, setCurrentBranch] = useState('main');
   const [changedFiles, setChangedFiles] = useState<Map<string, { content: string; originalContent: string }>>(new Map());
-  const [sidebarWidth, setSidebarWidth] = useState(256); // Default 256px (w-64)
+  const [sidebarWidth, setSidebarWidth] = useState(320); // Default 320px
+  const [activeSidebarPanel, setActiveSidebarPanel] = useState<'explorer' | 'git'>('explorer');
   const [isResizing, setIsResizing] = useState(false);
+  const [isRepoLoading, setIsRepoLoading] = useState(false);
+  const [cloneStatus, setCloneStatus] = useState<{ state: 'idle' | 'cloning'; progress?: git.CloneProgress | null }>({
+    state: 'idle',
+    progress: null,
+  });
   const hasLoadedStoredRepo = useRef(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
 
@@ -147,9 +171,13 @@ export default function Home() {
 
   useEffect(() => {
     if (isResizing) {
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
       window.addEventListener('mousemove', resize);
       window.addEventListener('mouseup', stopResizing);
       return () => {
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
         window.removeEventListener('mousemove', resize);
         window.removeEventListener('mouseup', stopResizing);
       };
@@ -196,6 +224,7 @@ export default function Home() {
 
   const handleLoadRepo = useCallback(async (url: string, branchOverride?: string) => {
     try {
+      setIsRepoLoading(true);
       const branchToLoad = branchOverride || currentBranch;
       const response = await fetch('/api/github', {
         method: 'POST',
@@ -210,19 +239,43 @@ export default function Home() {
       const data = await response.json();
       if (response.ok) {
         const tree = buildFileTree(data.tree);
+        const resolvedBranch = data.branch || branchToLoad || 'main';
         setFiles(tree);
         setRepoInfo({ owner: data.owner, repo: data.repo });
-        setCurrentBranch(data.branch || branchToLoad || 'main');
+        setCurrentBranch(resolvedBranch);
         setSelectedFile(null);
+        setOpenFiles([]);
         setChangedFiles(new Map());
+        const token = (session as any).accessToken;
+        const name = (session as any).user?.name || 'User';
+        const email = (session as any).user?.email || 'user@example.com';
+        try {
+          const cloned = await git.isRepoCloned();
+          if (!cloned) {
+            setCloneStatus({ state: 'cloning', progress: null });
+            await git.cloneRepo(url, { token, name, email }, (progress) => {
+              setCloneStatus({ state: 'cloning', progress });
+            });
+          }
+          if (resolvedBranch) {
+            await git.checkoutBranch(resolvedBranch);
+          }
+        } catch (cloneError) {
+          console.error('Error cloning repository:', cloneError);
+          notify({ type: 'error', message: 'Failed to clone repository.' });
+        } finally {
+          setCloneStatus({ state: 'idle', progress: null });
+        }
       } else {
-        alert('Failed to load repository: ' + data.error);
+        notify({ type: 'error', message: `Failed to load repository: ${data.error}` });
       }
     } catch (error) {
       console.error('Error loading repository:', error);
-      alert('Error loading repository');
+      notify({ type: 'error', message: 'Error loading repository.' });
+    } finally {
+      setIsRepoLoading(false);
     }
-  }, [currentBranch, session]);
+  }, [currentBranch, session, notify]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -248,6 +301,15 @@ export default function Home() {
     setCurrentBranch(newBranch);
     setChangedFiles(new Map());
     setSelectedFile(null);
+    setOpenFiles([]);
+    try {
+      const cloned = await refreshRepoCloned();
+      if (cloned) {
+        await git.checkoutBranch(newBranch);
+      }
+    } catch (error) {
+      console.error('Failed to checkout branch:', error);
+    }
     
     // Reload repository with new branch
     const url = `https://github.com/${repoInfo.owner}/${repoInfo.repo}`;
@@ -294,13 +356,30 @@ export default function Home() {
     if (!repoInfo) return;
 
     try {
+      const existing = openFiles.find((file) => file.name === path);
+      if (existing) {
+        const pendingContent = changedFiles.get(path)?.content ?? existing.content;
+        setSelectedFile({
+          content: pendingContent,
+          language: existing.language,
+          name: path,
+        });
+        return;
+      }
+
       const cloned = await refreshRepoCloned();
       if (cloned) {
         try {
           const content = await git.readFile(path);
+          const language = getLanguageFromExtension(path);
+          setOpenFiles((prev) => {
+            if (prev.some((file) => file.name === path)) return prev;
+            return [...prev, { name: path, content, language }];
+          });
+          const pendingContent = changedFiles.get(path)?.content ?? content;
           setSelectedFile({
-            content,
-            language: getLanguageFromExtension(path),
+            content: pendingContent,
+            language,
             name: path,
           });
           return;
@@ -323,22 +402,29 @@ export default function Home() {
 
       const data = await response.json();
       if (response.ok) {
+        const language = getLanguageFromExtension(path);
+        setOpenFiles((prev) => {
+          if (prev.some((file) => file.name === path)) return prev;
+          return [...prev, { name: path, content: data.content, language }];
+        });
+        const pendingContent = changedFiles.get(path)?.content ?? data.content;
         setSelectedFile({
-          content: data.content,
-          language: getLanguageFromExtension(path),
+          content: pendingContent,
+          language,
           name: path,
         });
       } else {
-        alert('Failed to load file');
+        notify({ type: 'error', message: 'Failed to load file.' });
       }
     } catch (error) {
       console.error('Error loading file:', error);
-      alert('Error loading file');
+      notify({ type: 'error', message: 'Error loading file.' });
     }
   };
 
   const handleContentChange = (newContent: string) => {
     if (!selectedFile) return;
+    if (selectedFile.kind === 'env' || selectedFile.kind === 'diff') return;
 
     const originalContent = changedFiles.get(selectedFile.name)?.originalContent || selectedFile.content;
     
@@ -357,13 +443,20 @@ export default function Home() {
       ...selectedFile,
       content: newContent
     });
+
+    setOpenFiles((prev) =>
+      prev.map((file) =>
+        file.name === selectedFile.name ? { ...file, content: newContent } : file
+      )
+    );
   };
 
   const handleSaveFile = useCallback(async () => {
     if (!selectedFile) return;
+    if (selectedFile.kind === 'env' || selectedFile.kind === 'diff') return;
     const cloned = await refreshRepoCloned();
     if (!cloned) {
-      alert('Clone the repository to save changes.');
+      notify({ type: 'warning', message: 'Clone the repository to save changes.' });
       return;
     }
 
@@ -376,16 +469,231 @@ export default function Home() {
         return next;
       });
       setSelectedFile((prev) => (prev ? { ...prev, content: updatedContent } : prev));
+      setOpenFiles((prev) =>
+        prev.map((file) =>
+          file.name === selectedFile.name ? { ...file, content: updatedContent } : file
+        )
+      );
     } catch (error) {
       console.error('Error saving file:', error);
-      alert('Failed to save file');
+      notify({ type: 'error', message: 'Failed to save file.' });
     }
-  }, [selectedFile, changedFiles, refreshRepoCloned]);
+  }, [selectedFile, changedFiles, refreshRepoCloned, notify]);
+
+  const handleSelectTab = useCallback((path: string) => {
+    const file = openFiles.find((entry) => entry.name === path);
+    if (!file) return;
+    if (file.kind === 'env') {
+      setSelectedFile({
+        name: file.name,
+        language: file.language,
+        content: file.content,
+        kind: 'env',
+        originalContent: file.originalContent,
+        isDirty: file.isDirty,
+      });
+      return;
+    }
+    if (file.kind === 'diff') {
+      setSelectedFile({
+        name: file.name,
+        language: file.language,
+        content: file.content,
+        originalContent: file.originalContent,
+        kind: 'diff',
+        sourcePath: file.sourcePath,
+      });
+      return;
+    }
+    const pendingContent = changedFiles.get(path)?.content ?? file.content;
+    setSelectedFile({
+      name: file.name,
+      language: file.language,
+      content: pendingContent,
+      kind: file.kind,
+    });
+  }, [openFiles, changedFiles]);
+
+  const handleCloseTab = useCallback((path: string) => {
+    const remaining = openFiles.filter((file) => file.name !== path);
+    setOpenFiles(remaining);
+
+    if (selectedFile?.name === path) {
+      const nextFile = remaining[remaining.length - 1];
+      if (nextFile) {
+        if (nextFile.kind === 'env') {
+          setSelectedFile({
+            name: nextFile.name,
+            language: nextFile.language,
+            content: nextFile.content,
+            kind: 'env',
+            originalContent: nextFile.originalContent,
+            isDirty: nextFile.isDirty,
+          });
+          return;
+        }
+        if (nextFile.kind === 'diff') {
+          setSelectedFile({
+            name: nextFile.name,
+            language: nextFile.language,
+            content: nextFile.content,
+            originalContent: nextFile.originalContent,
+            kind: 'diff',
+            sourcePath: nextFile.sourcePath,
+          });
+          return;
+        }
+        const pendingContent = changedFiles.get(nextFile.name)?.content ?? nextFile.content;
+        setSelectedFile({
+          name: nextFile.name,
+          language: nextFile.language,
+          content: pendingContent,
+          kind: nextFile.kind,
+        });
+      } else {
+        setSelectedFile(null);
+      }
+    }
+  }, [openFiles, selectedFile, changedFiles]);
+
+  const openEnvPanel = useCallback(async () => {
+    const envTabName = 'Environment Variables';
+    const existing = openFiles.find((file) => file.name === envTabName);
+    if (existing) {
+      setSelectedFile({
+        name: existing.name,
+        content: existing.content,
+        originalContent: existing.originalContent,
+        language: existing.language,
+        kind: 'env',
+        isDirty: existing.isDirty,
+      });
+      return;
+    }
+    let content = '';
+    let originalContent = '';
+    try {
+      const cloned = await refreshRepoCloned();
+      if (cloned) {
+        content = await git.readFile('.env');
+        originalContent = content;
+      }
+    } catch {
+      content = '';
+      originalContent = '';
+    }
+    setOpenFiles((prev) => [
+      ...prev,
+      { name: envTabName, content, originalContent, language: 'plaintext', kind: 'env', isDirty: false },
+    ]);
+    setSelectedFile({
+      name: envTabName,
+      content,
+      originalContent,
+      language: 'plaintext',
+      kind: 'env',
+      isDirty: false,
+    });
+  }, [openFiles, refreshRepoCloned]);
+
+  const handleEnvContentChange = useCallback((value: string) => {
+    setOpenFiles((prev) =>
+      prev.map((file) => {
+        if (file.kind !== 'env') return file;
+        const originalContent = file.originalContent ?? '';
+        const isDirty = value !== originalContent;
+        return { ...file, content: value, isDirty };
+      })
+    );
+    setSelectedFile((prev) => {
+      if (!prev || prev.kind !== 'env') return prev;
+      const originalContent = prev.originalContent ?? '';
+      return { ...prev, content: value, isDirty: value !== originalContent };
+    });
+  }, []);
+
+  const handleSaveEnv = useCallback(async () => {
+    if (!selectedFile || selectedFile.kind !== 'env') return;
+    const cloned = await refreshRepoCloned();
+    if (!cloned) {
+      notify({ type: 'warning', message: 'Clone the repository to save changes.' });
+      return;
+    }
+    try {
+      await git.writeFile('.env', selectedFile.content);
+      setOpenFiles((prev) =>
+        prev.map((file) => {
+          if (file.kind !== 'env') return file;
+          return { ...file, originalContent: selectedFile.content, isDirty: false };
+        })
+      );
+      setSelectedFile((prev) =>
+        prev && prev.kind === 'env'
+          ? { ...prev, originalContent: prev.content, isDirty: false }
+          : prev
+      );
+      notify({ type: 'success', message: 'Environment variables saved.' });
+    } catch (error) {
+      console.error('Error saving env file:', error);
+      notify({ type: 'error', message: 'Failed to save environment variables.' });
+    }
+  }, [notify, refreshRepoCloned, selectedFile]);
+
+  const handleOpenDiff = useCallback(async (path: string, status: 'modified' | 'added' | 'deleted' | 'unmodified') => {
+    const language = getLanguageFromExtension(path);
+    const tabName = `${path} (diff)`;
+    let originalContent = '';
+    let modifiedContent = '';
+
+    try {
+      originalContent = await git.readFileAtHead(path);
+    } catch {
+      originalContent = '';
+    }
+
+    if (status !== 'deleted') {
+      try {
+        modifiedContent = await git.readFile(path);
+      } catch {
+        modifiedContent = '';
+      }
+    }
+
+    setOpenFiles((prev) => {
+      if (prev.some((file) => file.name === tabName)) {
+        return prev.map((file) =>
+          file.name === tabName
+            ? { ...file, content: modifiedContent, originalContent, language }
+            : file
+        );
+      }
+      return [
+        ...prev,
+        {
+          name: tabName,
+          content: modifiedContent,
+          originalContent,
+          language,
+          kind: 'diff',
+          sourcePath: path,
+        },
+      ];
+    });
+
+    setSelectedFile({
+      name: tabName,
+      content: modifiedContent,
+      originalContent,
+      language,
+      kind: 'diff',
+      sourcePath: path,
+    });
+  }, []);
 
   const handleCloseRepo = useCallback(async () => {
     if (!repoInfo) return;
 
-    let hasDirtyChanges = changedFiles.size > 0;
+    let hasDirtyChanges = changedFiles.size > 0 || openFiles.some((file) => file.kind === 'env' && file.isDirty);
     const cloned = await refreshRepoCloned();
 
     if (cloned) {
@@ -403,27 +711,48 @@ export default function Home() {
       const shouldDiscard = window.confirm(
         'You have uncommitted changes. Do you want to discard them and close the repository?'
       );
-      if (!shouldDiscard) return;
+      if (!shouldDiscard) return false;
     }
 
     setRepoInfo(null);
     setFiles([]);
     setSelectedFile(null);
+    setOpenFiles([]);
     setChangedFiles(new Map());
     setCurrentBranch('main');
+    setActiveSidebarPanel('explorer');
     hasLoadedStoredRepo.current = false;
 
     if (typeof window !== 'undefined') {
       localStorage.removeItem('last-repo');
+      localStorage.removeItem('env-variables-text');
     }
     try {
       await git.clearWorkspace();
     } catch (error) {
       console.error('Failed to clear workspace:', error);
     }
-  }, [repoInfo, changedFiles, refreshRepoCloned]);
+    return true;
+  }, [repoInfo, changedFiles, openFiles, refreshRepoCloned]);
 
   const hasUnsavedChanges = selectedFile ? changedFiles.has(selectedFile.name) : false;
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const isSaveCombo = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's';
+      if (!isSaveCombo) return;
+      if (selectedFile?.kind !== 'env') return;
+      event.preventDefault();
+      if (selectedFile.isDirty) {
+        handleSaveEnv();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [handleSaveEnv, selectedFile]);
 
   if (status === 'loading') {
     return (
@@ -452,34 +781,9 @@ export default function Home() {
             </svg>
             <span className="text-vscode-text font-semibold">Rumsan Coder</span>
           </div>
-          {repoInfo && (
-            <div className="flex items-center gap-3 ml-4">
-              <div className="text-vscode-text text-sm">
-                {repoInfo.owner}/{repoInfo.repo}
-              </div>
-              <BranchSelector
-                repoInfo={repoInfo}
-                currentBranch={currentBranch}
-                onBranchChange={handleBranchChange}
-                token={(session as any).accessToken}
-                isDarkTheme={isDarkTheme}
-              />
-            </div>
-          )}
         </div>
         
         <div className="flex items-center gap-4">
-          <EnvVariablesPanel isDarkTheme={isDarkTheme} />
-          
-          {repoInfo && (
-            <button
-              onClick={handleCloseRepo}
-              className="flex items-center gap-2 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-vscode-text rounded text-sm transition-colors"
-            >
-              Close Repository
-            </button>
-          )}
-          
           <button
             onClick={() => setIsDarkTheme(!isDarkTheme)}
             className="p-2 text-vscode-text hover:text-blue-500 transition-colors"
@@ -494,7 +798,13 @@ export default function Home() {
           </div>
           
           <button
-            onClick={() => signOut({ callbackUrl: '/login' })}
+            onClick={async () => {
+              if (repoInfo) {
+                const closed = await handleCloseRepo();
+                if (closed === false) return;
+              }
+              await signOut({ callbackUrl: '/login' });
+            }}
             className="text-vscode-text hover:text-blue-500 transition-colors"
             title="Sign out"
           >
@@ -504,71 +814,229 @@ export default function Home() {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex">
         {/* Sidebar */}
         {repoInfo && (
           <div 
             ref={sidebarRef}
-            className="bg-vscode-sidebar border-thin-r overflow-y-auto relative"
+            className="bg-vscode-sidebar border-thin-r relative flex flex-col"
             style={{ width: `${sidebarWidth}px` }}
           >
             <div className="h-12 px-4 flex items-center border-thin-b">
-              <h2 className="text-vscode-text text-sm font-semibold uppercase">Explorer</h2>
-            </div>
-            {files.length > 0 ? (
-              <FileTree files={files} onFileClick={handleFileClick} />
-            ) : (
-              <div className="p-4 text-vscode-text text-sm text-center">
-                Loading files...
+              <div className="flex items-center justify-between w-full">
+                <h2 className="text-vscode-text text-xs font-semibold uppercase">
+                  {activeSidebarPanel === 'explorer' ? 'Explorer' : 'Source Control'}
+                </h2>
+                {repoInfo && activeSidebarPanel === 'explorer' && (
+                  <button
+                    onClick={handleCloseRepo}
+                    className="flex items-center gap-1 text-xs text-red-100 px-2 py-1 rounded bg-red-600/40 hover:bg-red-600/60 transition-colors"
+                    title="Close repository"
+                  >
+                    <X className="w-3 h-3" />
+                    <span>Close Repo</span>
+                  </button>
+                )}
               </div>
-            )}
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {activeSidebarPanel === 'explorer' ? (
+                files.length > 0 ? (
+                  <FileTree files={files} onFileClick={handleFileClick} />
+                ) : (
+                  <div className="p-4 text-vscode-text text-sm text-center">
+                    Loading files...
+                  </div>
+                )
+              ) : (
+                <GitPanel
+                  repoUrl={`https://github.com/${repoInfo.owner}/${repoInfo.repo}`}
+                  token={(session as any).accessToken}
+                  userName={(session as any).user?.name}
+                  userEmail={(session as any).user?.email}
+                  isDarkTheme={isDarkTheme}
+                  variant="panel"
+                  isActive={activeSidebarPanel === 'git'}
+                  onOpenDiff={handleOpenDiff}
+                  onCloneStatus={setCloneStatus}
+                  autoClone={false}
+                  currentBranch={currentBranch}
+                  onBranchChange={setCurrentBranch}
+                />
+              )}
+            </div>
+            <div className="h-10 border-thin-t flex bg-vscode-sidebar">
+              <button
+                type="button"
+                onClick={() => setActiveSidebarPanel('explorer')}
+                className={`flex-1 flex items-center justify-center gap-2 text-xs uppercase tracking-wide border-r border-vscode-border ${
+                  activeSidebarPanel === 'explorer'
+                    ? 'bg-vscode-editor text-vscode-text border-t-2 border-t-blue-500'
+                    : 'text-vscode-text opacity-70 hover:opacity-100 hover:bg-vscode-hover border-t-2 border-t-transparent'
+                }`}
+              >
+                <ListTree className="w-4 h-4" />
+                <span>Explorer</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveSidebarPanel('git')}
+                className={`flex-1 flex items-center justify-center gap-2 text-xs uppercase tracking-wide ${
+                  activeSidebarPanel === 'git'
+                    ? 'bg-vscode-editor text-vscode-text border-t-2 border-t-blue-500'
+                    : 'text-vscode-text opacity-70 hover:opacity-100 hover:bg-vscode-hover border-t-2 border-t-transparent'
+                }`}
+              >
+                <GitCommit className="w-4 h-4" />
+                <span>Git</span>
+              </button>
+            </div>
             {/* Resize Handle */}
             <div
-              className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-blue-500 transition-colors"
-              onMouseDown={startResizing}
+              className="absolute top-0 right-0 w-2 h-full cursor-col-resize hover:bg-blue-500 transition-colors z-10"
+              onMouseDown={(event) => {
+                event.preventDefault();
+                startResizing();
+              }}
             />
           </div>
         )}
 
         {/* Editor Panel */}
-        <div className="flex-1 bg-vscode-editor">
-          {selectedFile ? (
-            <CodeEditor
-              content={selectedFile.content}
-              language={selectedFile.language}
-              fileName={selectedFile.name}
-              isDarkTheme={isDarkTheme}
-              onContentChange={handleContentChange}
-              onSave={handleSaveFile}
-              hasUnsavedChanges={hasUnsavedChanges}
-            />
-          ) : (
-            <div className="h-full flex items-center justify-center">
-              <div className="text-center">
-                {!repoInfo ? (
-                  <>
-                    <FolderGit2 className="w-16 h-16 text-vscode-text mx-auto mb-4 opacity-50" />
-                    <p className="text-vscode-text text-lg mb-6">No repository loaded</p>
+        <div className="flex-1 bg-vscode-editor flex flex-col">
+          {openFiles.length > 0 && (
+            <div className="flex items-center gap-0 overflow-x-auto border-thin-b bg-vscode-sidebar">
+              {openFiles.map((file) => {
+                const isActive = selectedFile?.name === file.name;
+                const labelSource = file.kind === 'diff' ? file.sourcePath : file.name;
+                const label = labelSource ? labelSource.split('/').pop() : file.name;
+                return (
+                  <div
+                    key={file.name}
+                    className={`relative flex items-center gap-2 px-4 py-2 text-sm cursor-pointer border-r border-vscode-border ${
+                      isActive
+                        ? 'bg-vscode-editor text-vscode-text border-t-2 border-t-blue-500'
+                        : 'bg-vscode-sidebar text-vscode-text opacity-70 hover:opacity-100 hover:bg-vscode-hover'
+                    }`}
+                    onClick={() => handleSelectTab(file.name)}
+                  >
+                    <span className="truncate max-w-[180px]">
+                      {file.kind === 'diff' ? `${label} (diff)` : label}
+                    </span>
+                    {(changedFiles.has(file.name) || (file.kind === 'env' && file.isDirty)) && (
+                      <span className="w-2 h-2 bg-blue-500 rounded-full" title="Unsaved changes"></span>
+                    )}
                     <button
-                      onClick={() => setIsModalOpen(true)}
-                      className="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-vscode-text rounded transition-colors mx-auto"
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleCloseTab(file.name);
+                      }}
+                      className="p-0.5 rounded hover:bg-vscode-hover"
+                      title="Close tab"
                     >
-                      <FolderGit2 className="w-5 h-5" />
-                      Open a Repository
+                      <X className="w-3 h-3" />
                     </button>
-                  </>
-                ) : (
-                  <>
-                    <File className="w-16 h-16 text-vscode-text mx-auto mb-4 opacity-50" />
-                    <p className="text-vscode-text text-lg">No file selected</p>
-                    <p className="text-vscode-text text-sm mt-2">
-                      Select a file from the explorer to view
-                    </p>
-                  </>
-                )}
-              </div>
+                  </div>
+                );
+              })}
             </div>
           )}
+          <div className="flex-1 min-h-0">
+            {selectedFile ? (
+              selectedFile.kind === 'env' ? (
+                <EnvVariablesPanel
+                  isDarkTheme={isDarkTheme}
+                  content={selectedFile.content}
+                  onChange={handleEnvContentChange}
+                />
+              ) : selectedFile.kind === 'diff' ? (
+                <DiffViewer
+                  original={selectedFile.originalContent ?? ''}
+                  modified={selectedFile.content}
+                  language={selectedFile.language}
+                  isDarkTheme={isDarkTheme}
+                />
+              ) : (
+                <CodeEditor
+                  content={selectedFile.content}
+                  language={selectedFile.language}
+                  fileName={selectedFile.name}
+                  isDarkTheme={isDarkTheme}
+                  onContentChange={handleContentChange}
+                  onSave={handleSaveFile}
+                  hasUnsavedChanges={hasUnsavedChanges}
+                />
+              )
+            ) : (
+              <div className="h-full flex items-center justify-center">
+                <div className="text-center">
+                  {!repoInfo ? (
+                    <>
+                      <FolderGit2 className="w-16 h-16 text-vscode-text mx-auto mb-4 opacity-50" />
+                      <p className="text-vscode-text text-lg mb-6">No repository loaded</p>
+                      <button
+                        onClick={() => setIsModalOpen(true)}
+                        className="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-vscode-text rounded transition-colors mx-auto"
+                      >
+                        <FolderGit2 className="w-5 h-5" />
+                        Open a Repository
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <File className="w-16 h-16 text-vscode-text mx-auto mb-4 opacity-50" />
+                      <p className="text-vscode-text text-lg">No file selected</p>
+                      <p className="text-vscode-text text-sm mt-2">
+                        Select a file from the explorer to view
+                      </p>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="h-9 border-thin-t status-bar flex items-center justify-between px-3 text-xs text-vscode-text">
+            {repoInfo ? (
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => window.open(`https://github.com/${repoInfo.owner}/${repoInfo.repo}`, '_blank', 'noopener,noreferrer')}
+                  className={`status-bar-button flex items-center gap-2 px-3 py-1.5 border border-transparent ${
+                    isDarkTheme
+                      ? 'hover:bg-vscode-hover hover:border-vscode-border'
+                      : 'hover:bg-gray-300 hover:border-gray-300'
+                  } text-vscode-text rounded text-xs transition-colors`}
+                  title="Open repository on GitHub"
+                >
+                  <Github className="w-4 h-4" />
+                  <span className="opacity-90">{repoInfo.owner}/{repoInfo.repo}</span>
+                </button>
+                <BranchSelector
+                  repoInfo={repoInfo}
+                  currentBranch={currentBranch}
+                  onBranchChange={handleBranchChange}
+                  token={(session as any).accessToken}
+                  isDarkTheme={isDarkTheme}
+                />
+              </div>
+            ) : (
+              <span className="opacity-70">No repository loaded</span>
+            )}
+            <button
+              type="button"
+              onClick={openEnvPanel}
+              className={`status-bar-button flex items-center gap-2 px-3 py-1.5 border border-transparent ${
+                isDarkTheme
+                  ? 'hover:bg-vscode-hover hover:border-vscode-border'
+                  : 'hover:bg-gray-300 hover:border-gray-300'
+              } text-vscode-text rounded text-xs transition-colors`}
+              title="Open Environment Variables"
+            >
+              <Settings className="w-4 h-4" />
+              <span>ENV</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -577,18 +1045,28 @@ export default function Home() {
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onSubmit={handleLoadRepo}
+        token={(session as any).accessToken}
       />
-
-      {/* Git Panel */}
-      {repoInfo && (
-        <GitPanel
-          repoUrl={`https://github.com/${repoInfo.owner}/${repoInfo.repo}`}
-          token={(session as any).accessToken}
-          userName={(session as any).user?.name}
-          userEmail={(session as any).user?.email}
-          isDarkTheme={isDarkTheme}
-        />
+      {(isRepoLoading || cloneStatus.state === 'cloning') && (
+        <div className="fixed inset-0 z-50 bg-black bg-opacity-60 flex items-center justify-center">
+          <div className="bg-vscode-sidebar border border-vscode-border rounded-lg p-5 w-[360px] text-vscode-text text-sm shadow-xl">
+            <div className="font-semibold mb-2">
+              {cloneStatus.state === 'cloning' ? 'Cloning repository' : 'Loading repository'}
+            </div>
+            <div className="text-xs opacity-80">
+              {cloneStatus.state === 'cloning'
+                ? cloneStatus.progress
+                  ? `${cloneStatus.progress.phase}: ${cloneStatus.progress.loaded} / ${cloneStatus.progress.total}`
+                  : 'Preparing repository...'
+                : 'Fetching repository tree and metadata...'}
+            </div>
+            <div className="mt-4 h-1.5 w-full bg-vscode-editor rounded-full overflow-hidden">
+              <div className="h-full w-2/3 bg-blue-500 animate-pulse" />
+            </div>
+          </div>
+        </div>
       )}
+
     </div>
   );
 }

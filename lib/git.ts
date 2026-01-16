@@ -302,12 +302,87 @@ export async function pull(config: GitConfig): Promise<void> {
 }
 
 /**
+ * Get ahead count vs remote branch.
+ */
+export async function getAheadCount(branch?: string): Promise<number> {
+  const fs = getFS();
+  const ref = branch || await getCurrentBranch();
+  const localCommits = await git.log({
+    fs,
+    dir: WORK_DIR,
+    ref,
+    depth: 200,
+  });
+
+  let remoteCommits: Array<{ oid: string }> = [];
+  try {
+    const remoteRef = `refs/remotes/origin/${ref}`;
+    await git.resolveRef({ fs, dir: WORK_DIR, ref: remoteRef });
+    remoteCommits = await git.log({
+      fs,
+      dir: WORK_DIR,
+      ref: remoteRef,
+      depth: 200,
+    });
+  } catch {
+    return localCommits.length;
+  }
+
+  const remoteSet = new Set(remoteCommits.map((commit) => commit.oid));
+  return localCommits.filter((commit) => !remoteSet.has(commit.oid)).length;
+}
+
+/**
  * Read a file from the filesystem
  */
 export async function readFile(filepath: string): Promise<string> {
   const fs = getFS();
   const data = await fs.promises.readFile(`${WORK_DIR}/${filepath}`, { encoding: 'utf8' });
   return data as string;
+}
+
+/**
+ * Read a file from HEAD (last commit).
+ */
+export async function readFileAtHead(filepath: string): Promise<string> {
+  const fs = getFS();
+  const oid = await git.resolveRef({ fs, dir: WORK_DIR, ref: 'HEAD' });
+  const { blob } = await git.readBlob({
+    fs,
+    dir: WORK_DIR,
+    oid,
+    filepath,
+  });
+  return new TextDecoder('utf-8').decode(blob);
+}
+
+/**
+ * Discard changes for a single file.
+ */
+export async function discardChanges(
+  filepath: string,
+  status: 'modified' | 'added' | 'deleted' | 'unmodified'
+): Promise<void> {
+  const fs = getFS();
+  if (status === 'unmodified') return;
+
+  if (status === 'added') {
+    try {
+      await fs.promises.unlink(`${WORK_DIR}/${filepath}`);
+    } catch {
+      // Ignore missing file
+    }
+    await git.resetIndex({ fs, dir: WORK_DIR, filepath });
+    return;
+  }
+
+  await git.resetIndex({ fs, dir: WORK_DIR, filepath });
+  await git.checkout({
+    fs,
+    dir: WORK_DIR,
+    ref: 'HEAD',
+    filepaths: [filepath],
+  });
 }
 
 /**

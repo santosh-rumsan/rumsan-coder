@@ -29,7 +29,7 @@ function TreeNode({ node, onFileClick, level = 0 }: { node: FileNode; onFileClic
   return (
     <div>
       <div
-        className={`flex items-center gap-1 px-2 py-1 cursor-pointer hover:bg-vscode-hover text-sm ${
+        className={`flex items-center gap-1 px-2 py-1 cursor-pointer hover:bg-vscode-hover text-[12px] ${
           level === 0 ? '' : 'ml-' + (level * 4)
         }`}
         style={{ paddingLeft: `${level * 16 + 8}px` }}
