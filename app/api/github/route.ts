@@ -70,7 +70,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to fetch repository' }, { status: 400 });
     }
 
-    const data = await response.json();
+    const data = await (response as Response).json();
     return NextResponse.json({ tree: data.tree, owner, repo: repoName, branch: resolvedBranch });
   } catch (error) {
     console.error('Error fetching repository:', error);
