@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(request: NextRequest) {
   try {
-    const { url, token, branch = 'main' } = await request.json();
+    const { url, token, branch } = await request.json();
     
     // Parse GitHub URL to extract owner and repo
     const match = url.match(/github\.com\/([^\/]+)\/([^\/]+)/);
@@ -14,55 +14,64 @@ export async function POST(request: NextRequest) {
     const [, owner, repo] = match;
     const repoName = repo.replace('.git', '');
 
-    // Fetch repository tree with specified branch
-    const response = await fetch(
-      `https://api.github.com/repos/${owner}/${repoName}/git/trees/${branch}?recursive=1`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/vnd.github.v3+json',
-        },
-      }
-    );
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github.v3+json',
+    };
 
-    if (!response.ok) {
-      // Try 'main' branch if specified branch doesn't exist
-      const mainResponse = await fetch(
-        `https://api.github.com/repos/${owner}/${repoName}/git/trees/main?recursive=1`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept: 'application/vnd.github.v3+json',
-          },
-        }
+    const fetchTree = async (ref: string) => {
+      return fetch(
+        `https://api.github.com/repos/${owner}/${repoName}/git/trees/${ref}?recursive=1`,
+        { headers }
       );
+    };
 
-      if (!mainResponse.ok) {
-        // Try 'master' branch as last resort
-        const masterResponse = await fetch(
-          `https://api.github.com/repos/${owner}/${repoName}/git/trees/master?recursive=1`,
-          {
-            headers: {
-              Authorization: `Bearer ${token}`,
-              Accept: 'application/vnd.github.v3+json',
-            },
-          }
-        );
+    const fetchDefaultBranch = async (): Promise<string | null> => {
+      const repoResponse = await fetch(
+        `https://api.github.com/repos/${owner}/${repoName}`,
+        { headers }
+      );
+      if (!repoResponse.ok) return null;
+      const repoData = await repoResponse.json();
+      return repoData?.default_branch || null;
+    };
 
-        if (!masterResponse.ok) {
-          return NextResponse.json({ error: 'Failed to fetch repository' }, { status: 400 });
-        }
+    const attempted = new Set<string>();
+    let response: Response | null = null;
+    let resolvedBranch: string | null = null;
 
-        const data = await masterResponse.json();
-        return NextResponse.json({ tree: data.tree, owner, repo: repoName, branch: 'master' });
+    const tryBranch = async (ref: string | null) => {
+      if (!ref || attempted.has(ref)) return false;
+      attempted.add(ref);
+      response = await fetchTree(ref);
+      if (response.ok) {
+        resolvedBranch = ref;
+        return true;
       }
+      return false;
+    };
 
-      const data = await mainResponse.json();
-      return NextResponse.json({ tree: data.tree, owner, repo: repoName, branch: 'main' });
+    await tryBranch(branch);
+
+    if (!resolvedBranch) {
+      const defaultBranch = await fetchDefaultBranch();
+      await tryBranch(defaultBranch);
+    }
+
+    if (!resolvedBranch) {
+      await tryBranch('main');
+    }
+
+    if (!resolvedBranch) {
+      await tryBranch('master');
+    }
+
+    if (!resolvedBranch || !response) {
+      return NextResponse.json({ error: 'Failed to fetch repository' }, { status: 400 });
     }
 
     const data = await response.json();
-    return NextResponse.json({ tree: data.tree, owner, repo: repoName, branch });
+    return NextResponse.json({ tree: data.tree, owner, repo: repoName, branch: resolvedBranch });
   } catch (error) {
     console.error('Error fetching repository:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

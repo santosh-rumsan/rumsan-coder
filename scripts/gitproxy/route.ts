@@ -12,7 +12,7 @@ import { NextRequest, NextResponse } from 'next/server';
 function getTargetUrl(request: NextRequest, params: { path?: string[] }): string {
   // Extract the remaining path from params
   const pathSegments = params.path || [];
-  let targetPath = pathSegments.join('/');
+  const targetPath = pathSegments.join('/');
 
   // Construct the full URL with HTTPS protocol
   const fullUrl = `https://${targetPath}`;

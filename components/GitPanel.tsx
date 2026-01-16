@@ -24,6 +24,8 @@ interface GitPanelProps {
   autoClone?: boolean;
   currentBranch?: string;
   onBranchChange?: (branch: string) => void;
+  refreshKey?: number;
+  onChangesCount?: (count: number) => void;
 }
 
 export default function GitPanel({ 
@@ -39,6 +41,8 @@ export default function GitPanel({
   autoClone = true,
   currentBranch: currentBranchProp,
   onBranchChange,
+  refreshKey,
+  onChangesCount,
 }: GitPanelProps) {
   const { notify } = useAlert();
   const isPanel = variant === 'panel';
@@ -71,6 +75,7 @@ export default function GitPanel({
     setIsRepoCloned(false);
     setChanges([]);
     setCurrentBranch('main');
+    onChangesCount?.(0);
   }, [repoUrl, token]);
 
   useEffect(() => {
@@ -106,11 +111,17 @@ export default function GitPanel({
   }, [repoUrl, token]);
 
   useEffect(() => {
-    if (variant !== 'panel' || !isActive) return;
+    if (variant !== 'panel') return;
     if (typeof window === 'undefined') return;
     if (!isRepoCloned) return;
     loadGitStatus();
-  }, [variant, isActive, isRepoCloned]);
+  }, [variant, isRepoCloned]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!isRepoCloned) return;
+    loadGitStatus();
+  }, [refreshKey, isRepoCloned]);
 
   const loadGitStatus = async () => {
     try {
@@ -146,6 +157,7 @@ export default function GitPanel({
       });
 
       setChanges(changedFiles);
+      onChangesCount?.(changedFiles.length);
       
       // Update staged files set
       const staged = new Set(

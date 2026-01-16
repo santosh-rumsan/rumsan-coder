@@ -122,6 +122,8 @@ export default function Home() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
+  const [logoutPrompt, setLogoutPrompt] = useState('Continue to sign out?');
   const [files, setFiles] = useState<FileNode[]>([]);
   const [selectedFile, setSelectedFile] = useState<{
     content: string;
@@ -137,6 +139,8 @@ export default function Home() {
   const [isDarkTheme, setIsDarkTheme] = useState(true);
   const [currentBranch, setCurrentBranch] = useState('main');
   const [changedFiles, setChangedFiles] = useState<Map<string, { content: string; originalContent: string }>>(new Map());
+  const [gitRefreshKey, setGitRefreshKey] = useState(0);
+  const [gitChangesCount, setGitChangesCount] = useState(0);
   const [sidebarWidth, setSidebarWidth] = useState(320); // Default 320px
   const [activeSidebarPanel, setActiveSidebarPanel] = useState<'explorer' | 'git'>('explorer');
   const [isResizing, setIsResizing] = useState(false);
@@ -190,6 +194,35 @@ export default function Home() {
     }
   }, [status, router]);
 
+  const resetRepoState = useCallback(() => {
+    setRepoInfo(null);
+    setFiles([]);
+    setSelectedFile(null);
+    setOpenFiles([]);
+    setChangedFiles(new Map());
+    setCurrentBranch('main');
+    setActiveSidebarPanel('explorer');
+    hasLoadedStoredRepo.current = false;
+  }, []);
+
+  const clearCachedRepo = useCallback(async () => {
+    resetRepoState();
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('last-repo');
+      localStorage.removeItem('env-variables-text');
+    }
+    try {
+      await git.clearWorkspace();
+    } catch (error) {
+      console.error('Failed to clear workspace:', error);
+    }
+  }, [resetRepoState]);
+
+  useEffect(() => {
+    if (status !== 'unauthenticated') return;
+    void clearCachedRepo();
+  }, [status, clearCachedRepo]);
+
   const refreshRepoCloned = useCallback(async () => {
     try {
       const cloned = await git.isRepoCloned();
@@ -225,15 +258,18 @@ export default function Home() {
   const handleLoadRepo = useCallback(async (url: string, branchOverride?: string) => {
     try {
       setIsRepoLoading(true);
-      const branchToLoad = branchOverride || currentBranch;
+      const branchToLoad = branchOverride || (repoInfo ? currentBranch : undefined);
+      const payload: { url: string; token: string; branch?: string } = {
+        url,
+        token: (session as any).accessToken,
+      };
+      if (branchToLoad) {
+        payload.branch = branchToLoad;
+      }
       const response = await fetch('/api/github', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url,
-          token: (session as any).accessToken,
-          branch: branchToLoad,
-        }),
+        body: JSON.stringify(payload),
       });
 
       const data = await response.json();
@@ -275,7 +311,7 @@ export default function Home() {
     } finally {
       setIsRepoLoading(false);
     }
-  }, [currentBranch, session, notify]);
+  }, [currentBranch, session, notify, repoInfo]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -474,6 +510,7 @@ export default function Home() {
           file.name === selectedFile.name ? { ...file, content: updatedContent } : file
         )
       );
+      setGitRefreshKey((prev) => prev + 1);
     } catch (error) {
       console.error('Error saving file:', error);
       notify({ type: 'error', message: 'Failed to save file.' });
@@ -632,6 +669,7 @@ export default function Home() {
           ? { ...prev, originalContent: prev.content, isDirty: false }
           : prev
       );
+      setGitRefreshKey((prev) => prev + 1);
       notify({ type: 'success', message: 'Environment variables saved.' });
     } catch (error) {
       console.error('Error saving env file:', error);
@@ -714,26 +752,9 @@ export default function Home() {
       if (!shouldDiscard) return false;
     }
 
-    setRepoInfo(null);
-    setFiles([]);
-    setSelectedFile(null);
-    setOpenFiles([]);
-    setChangedFiles(new Map());
-    setCurrentBranch('main');
-    setActiveSidebarPanel('explorer');
-    hasLoadedStoredRepo.current = false;
-
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('last-repo');
-      localStorage.removeItem('env-variables-text');
-    }
-    try {
-      await git.clearWorkspace();
-    } catch (error) {
-      console.error('Failed to clear workspace:', error);
-    }
+    await clearCachedRepo();
     return true;
-  }, [repoInfo, changedFiles, openFiles, refreshRepoCloned]);
+  }, [repoInfo, changedFiles, openFiles, refreshRepoCloned, clearCachedRepo]);
 
   const hasUnsavedChanges = selectedFile ? changedFiles.has(selectedFile.name) : false;
 
@@ -802,8 +823,11 @@ export default function Home() {
               if (repoInfo) {
                 const closed = await handleCloseRepo();
                 if (closed === false) return;
+                setLogoutPrompt('Repo has been closed. Continue to sign out?');
+              } else {
+                setLogoutPrompt('Continue to sign out?');
               }
-              await signOut({ callbackUrl: '/login' });
+              setIsLogoutModalOpen(true);
             }}
             className="text-vscode-text hover:text-blue-500 transition-colors"
             title="Sign out"
@@ -862,6 +886,8 @@ export default function Home() {
                   autoClone={false}
                   currentBranch={currentBranch}
                   onBranchChange={setCurrentBranch}
+                  refreshKey={gitRefreshKey}
+                  onChangesCount={setGitChangesCount}
                 />
               )}
             </div>
@@ -889,6 +915,11 @@ export default function Home() {
               >
                 <GitCommit className="w-4 h-4" />
                 <span>Git</span>
+                {gitChangesCount > 0 && (
+                  <span className="ml-1 rounded-full bg-blue-600 text-white text-[10px] font-semibold px-1.5 py-0.5">
+                    {gitChangesCount}
+                  </span>
+                )}
               </button>
             </div>
             {/* Resize Handle */}
@@ -1047,6 +1078,33 @@ export default function Home() {
         onSubmit={handleLoadRepo}
         token={(session as any).accessToken}
       />
+      {isLogoutModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-vscode-sidebar border border-vscode-border rounded-lg p-6 max-w-sm w-full mx-4">
+            <div className="text-vscode-text text-base font-semibold mb-2">Sign out</div>
+            <p className="text-vscode-text text-sm opacity-90 mb-4">{logoutPrompt}</p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsLogoutModalOpen(false)}
+                className="px-3 py-2 text-vscode-text hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  setIsLogoutModalOpen(false);
+                  await signOut({ callbackUrl: '/login' });
+                }}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
+              >
+                Sign out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {(isRepoLoading || cloneStatus.state === 'cloning') && (
         <div className="fixed inset-0 z-50 bg-black bg-opacity-60 flex items-center justify-center">
           <div className="bg-vscode-sidebar border border-vscode-border rounded-lg p-5 w-[360px] text-vscode-text text-sm shadow-xl">

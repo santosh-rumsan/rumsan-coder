@@ -82,17 +82,17 @@ export async function cloneRepo(
   }
 
   try {
+    const gitProxyUrl = process.env.NEXT_PUBLIC_GIT_PROXY_URL || '/api/git-proxy';
     await git.clone({
       fs,
       http: authenticatedHttp as any,
       dir: WORK_DIR,
       url,
-      corsProxy: '/api/git-proxy',
+      corsProxy: gitProxyUrl,
       singleBranch: false,
       depth: 1,
       onProgress: onProgress
         ? (progress) => {
-            console.log('[git.cloneRepo] Progress:', progress);
             onProgress({
               phase: progress.phase,
               loaded: progress.loaded || 0,
@@ -169,11 +169,20 @@ export async function createBranch(branchName: string): Promise<void> {
  */
 export async function checkoutBranch(branchName: string): Promise<void> {
   const fs = getFS();
-  await git.checkout({
-    fs,
-    dir: WORK_DIR,
-    ref: branchName,
-  });
+  try {
+    await git.checkout({
+      fs,
+      dir: WORK_DIR,
+      ref: branchName,
+    });
+  } catch (error) {
+    await git.checkout({
+      fs,
+      dir: WORK_DIR,
+      ref: branchName,
+      remote: 'origin',
+    });
+  }
 }
 
 /**
@@ -270,6 +279,7 @@ export async function push(config: GitConfig, branch?: string): Promise<void> {
   const fs = getFS();
   const currentBranch = branch || await getCurrentBranch();
   const authenticatedHttp = createAuthenticatedHttp(config.token);
+  const gitProxyUrl = process.env.NEXT_PUBLIC_GIT_PROXY_URL || '/api/git-proxy';
   
   await git.push({
     fs,
@@ -277,7 +287,7 @@ export async function push(config: GitConfig, branch?: string): Promise<void> {
     dir: WORK_DIR,
     remote: 'origin',
     ref: currentBranch,
-    corsProxy: '/api/git-proxy',
+    corsProxy: gitProxyUrl,
   });
 }
 
@@ -287,12 +297,13 @@ export async function push(config: GitConfig, branch?: string): Promise<void> {
 export async function pull(config: GitConfig): Promise<void> {
   const fs = getFS();
   const authenticatedHttp = createAuthenticatedHttp(config.token);
+  const gitProxyUrl = process.env.NEXT_PUBLIC_GIT_PROXY_URL || '/api/git-proxy';
   
   await git.pull({
     fs,
     http: authenticatedHttp as any,
     dir: WORK_DIR,
-    corsProxy: '/api/git-proxy',
+    corsProxy: gitProxyUrl,
     singleBranch: true,
     author: {
       name: config.name || 'User',
