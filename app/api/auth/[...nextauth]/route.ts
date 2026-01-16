@@ -1,9 +1,11 @@
-import NextAuth from "next-auth";
-import GithubProvider from "next-auth/providers/github";
+export const runtime = 'edge';
 
-const handler = NextAuth({
+import NextAuth from "next-auth";
+import GitHub from "next-auth/providers/github";
+
+const { handlers: { GET, POST }, auth } = NextAuth({
   providers: [
-    GithubProvider({
+    GitHub({
       clientId: process.env.GITHUB_ID!,
       clientSecret: process.env.GITHUB_SECRET!,
       authorization: {
@@ -21,7 +23,7 @@ const handler = NextAuth({
       return token;
     },
     async session({ session, token }) {
-      (session as any).accessToken = token.accessToken;
+      (session as any).accessToken = (token as any).accessToken;
       return session;
     },
   },
@@ -30,4 +32,4 @@ const handler = NextAuth({
   },
 });
 
-export { handler as GET, handler as POST };
+export { GET, POST };
