@@ -793,13 +793,11 @@ export default function Home() {
       <div className="h-12 bg-vscode-sidebar border-thin-b px-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
-            <svg
-              className="w-6 h-6 text-blue-500"
-              fill="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path d="M23.15 2.587L18.21.21a1.494 1.494 0 0 0-1.705.29l-9.46 8.63-4.12-3.128a.999.999 0 0 0-1.276.057L.327 7.261A1 1 0 0 0 .326 8.74L3.899 12 .326 15.26a1 1 0 0 0 .001 1.479L1.65 17.94a.999.999 0 0 0 1.276.057l4.12-3.128 9.46 8.63a1.492 1.492 0 0 0 1.704.29l4.942-2.377A1.5 1.5 0 0 0 24 20.06V3.939a1.5 1.5 0 0 0-.85-1.352zm-5.146 14.861L10.826 12l7.178-5.448v10.896z" />
-            </svg>
+            <img
+              src="/app-logo.png"
+              alt="Rumsan Coder"
+              className="w-6 h-6 object-contain"
+            />
             <span className="text-vscode-text font-semibold">Rumsan Coder</span>
           </div>
         </div>
@@ -838,12 +836,12 @@ export default function Home() {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 flex">
+      <div className="flex-1 flex min-h-0">
         {/* Sidebar */}
         {repoInfo && (
           <div 
             ref={sidebarRef}
-            className="bg-vscode-sidebar border-thin-r relative flex flex-col"
+            className="bg-vscode-sidebar border-thin-r relative flex flex-col min-h-0"
             style={{ width: `${sidebarWidth}px` }}
           >
             <div className="h-12 px-4 flex items-center border-thin-b">
@@ -863,7 +861,7 @@ export default function Home() {
                 )}
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto">
+            <div className="flex-1 overflow-y-auto min-h-0">
               {activeSidebarPanel === 'explorer' ? (
                 files.length > 0 ? (
                   <FileTree files={files} onFileClick={handleFileClick} />
